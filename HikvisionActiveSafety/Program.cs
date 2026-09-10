@@ -19,6 +19,14 @@ public static class Program
         "00 00 00 3C 00 64 01 58 0A 38 06 CC D0 3B 26 09 09 12 30 45 00 00 47 34 30 54 45 53 54 " +
         "26 09 09 12 30 45 01 02 00 30 01 18 AC 7E";
 
+    // The same idea in JT/T 808-2019 framing: version flag set, 10-byte BCD phone number.
+    // Fatigue driving, level 2, degree 7, 3 attachments pending. The client's G40s report 2019.
+    const string SampleHex2019 =
+        "7E 02 00 40 53 01 00 00 00 00 01 38 00 13 80 00 00 06 00 00 00 00 00 00 00 03 01 58 0A " +
+        "38 06 CC D0 3B 00 64 02 58 00 5A 26 09 09 12 55 00 01 04 00 00 27 10 65 2F 00 00 00 2A " +
+        "01 01 02 07 00 00 00 00 3C 00 64 01 58 0A 38 06 CC D0 3B 26 09 09 12 30 45 00 00 47 34 " +
+        "30 54 45 53 54 26 09 09 12 30 45 01 03 00 E2 7E";
+
     static int _failures;
 
     static void Expect(string what, bool ok, string detail = null)
@@ -101,9 +109,55 @@ public static class Program
             after.UnknownLocationAttachData == null || after.UnknownLocationAttachData.Count == 0,
             after.UnknownLocationAttachData == null ? "null" : string.Join(",", after.UnknownLocationAttachData.Keys.Select(k => $"0x{k:X2}")));
 
+        Run2019Case();
+
         Console.WriteLine();
         Console.WriteLine(_failures == 0 ? "ALL CHECKS PASSED" : $"{_failures} CHECK(S) FAILED");
         return _failures == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Same registration, JT/T 808-2019 framing. The 2019 header is a different length (version
+    /// byte plus a 10-byte BCD phone number), so this is not a formality - if the version were
+    /// mis-detected the body would be read at the wrong offset and nothing below would decode.
+    /// </summary>
+    static void Run2019Case()
+    {
+        Console.WriteLine();
+        Console.WriteLine("================================================================");
+        Console.WriteLine(" JT/T 808-2019 framing - the version the G40s report");
+        Console.WriteLine("================================================================");
+
+        var bytes = SampleHex2019.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                                 .Select(x => Convert.ToByte(x, 16)).ToArray();
+
+        var before = Parse(bytes, register: false);
+        Expect("2019 before: 0x65 stranded in UnknownLocationAttachData",
+            before.UnknownLocationAttachData != null && before.UnknownLocationAttachData.ContainsKey(0x65));
+
+        var after = Parse(bytes, register: true);
+        Console.WriteLine(LocationDiagnostics.Describe(after));
+        Console.WriteLine();
+
+        bool found = after.CustomLocationAttachData != null &&
+                     after.CustomLocationAttachData.ContainsKey(0x65);
+        Expect("2019 after: 0x65 decoded from a 2019-framed packet", found);
+        if (!found) return;
+
+        var dsm = (JT808_0x0200_0x65)after.CustomLocationAttachData[0x65];
+        Console.WriteLine($"  decoded: {ActiveSafetyNames.Dsm(dsm.AlarmOrEventType)}, " +
+                          $"{ActiveSafetyNames.FlagState(dsm.FlagState)}, level {dsm.AlarmLevel}, " +
+                          $"fatigue degree {dsm.Fatigue}, {dsm.AttachmentCount} attachment(s)");
+        Console.WriteLine();
+
+        Expect("2019 field: fatigue driving", dsm.AlarmOrEventType == 0x01, $"0x{dsm.AlarmOrEventType:X2}");
+        Expect("2019 field: level 2", dsm.AlarmLevel == 2, dsm.AlarmLevel.ToString());
+        Expect("2019 field: fatigue degree 7", dsm.Fatigue == 7, dsm.Fatigue.ToString());
+        Expect("2019 field: attachment count 3", dsm.AttachmentCount == 3, dsm.AttachmentCount.ToString());
+        Expect("2019 field: position survived the longer header",
+            dsm.Latitude == 22547000 && dsm.Longitude == 114085947, $"{dsm.Latitude},{dsm.Longitude}");
+        Expect("2019 regression: 0x01 mileage still parsed",
+            after.BasicLocationAttachData != null && after.BasicLocationAttachData.ContainsKey(0x01));
     }
 
     static JT808_0x0200 Parse(byte[] bytes, bool register)

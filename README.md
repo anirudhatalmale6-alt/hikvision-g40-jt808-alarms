@@ -97,11 +97,25 @@ cd HikvisionActiveSafety && dotnet run     # exits non-zero if any check fails
 
 ```bash
 cd jt808-dump
+dotnet run -- capture.pcap       # Wireshark / tcpdump capture, straight in - no conversion
 dotnet run -- capture.txt        # hex text, any format: "7E 02 00", "7e0200", Wireshark, C# dumps
 dotnet run -- capture.bin --bin  # raw bytes
 dotnet run -- --selftest         # 32 checks, incl. negative controls
 dotnet run -- --gensample out.txt
 ```
+
+Capture a few minutes of live traffic with no changes to your server at all:
+
+```bash
+sudo tcpdump -i any -s 0 -w jt808.pcap 'tcp port YOUR_JT808_PORT'
+```
+
+Trigger an alarm while it runs, stop it, and feed the file straight in.
+
+`.pcap` and `.pcapng` are both read, classic and byte-swapped, Ethernet / Linux-cooked / raw-IP.
+**Each TCP connection is parsed separately** — with several cameras reporting at once, merging
+the streams would splice one camera's bytes into another's frames and invent checksum failures
+that look like device faults.
 
 It never skips an item it does not recognise — that is the entire point. Unknown payloads get a
 hex dump plus structure hints (embedded BCD timestamps, plausible lat/lng pairs, printable text).
@@ -122,6 +136,14 @@ Both tools are built to fail loudly rather than quietly:
 If a G40 turns out to differ, it will show up as a length mismatch or an unmapped code — not as
 plausible-looking wrong data.
 
+## Protocol version
+
+Both 2013 and **2019** framing are covered and tested. The 2019 header is a different length —
+an extra version byte and a 10-byte BCD phone number instead of 6 — so a parser that assumes
+2013 reads the body at the wrong offset and the whole packet turns to noise. The version flag
+(bit 14 of the body property word) is detected automatically; `HikvisionActiveSafety` decodes a
+2019-framed DSM alarm as part of its checks.
+
 ## Tests
 
 `jt808-dump --selftest` — 32 checks. It includes negative controls (a position-only packet must
@@ -129,5 +151,10 @@ report *no* alarm; a wrong-length item must be *refused*), and the suite has bee
 breaking the unknown-ID handling fails 15 checks, removing the length guard fails 2, and changing
 the headway scale fails 1.
 
-`HikvisionActiveSafety` — 17 checks covering the before/after behaviour, every decoded field, and
-regressions (registration must not cost the ordinary `0x01`/`0x30` items).
+`HikvisionActiveSafety` — 23 checks covering the before/after behaviour in both 2013 and 2019
+framing, every decoded field, and regressions (registration must not cost the ordinary
+`0x01`/`0x30` items).
+
+The pcap reader was checked against real third-party capture files rather than ones written
+here — classic, byte-swapped and pcapng — and its TCP extraction was compared byte for byte,
+per stream, against an independent implementation. All four streams matched on sha256.

@@ -31,21 +31,88 @@ public static class Program
 
         byte[] raw;
         bool binary = args.Contains("--bin");
-        var path = args.FirstOrDefault(a => !a.StartsWith("-"));
+        // First non-flag argument that is not the value belonging to --rawout.
+        string path = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("-")) continue;
+            if (i > 0 && args[i - 1] == "--rawout") continue;
+            path = args[i];
+            break;
+        }
 
         if (path == null)
         {
             var stdin = Console.In.ReadToEnd();
             raw = Hex.FromLooseText(stdin);
         }
-        else if (binary)
-        {
-            raw = File.ReadAllBytes(path);
-        }
         else
         {
-            var text = File.ReadAllText(path);
-            raw = Hex.FromLooseText(text);
+            var fileBytes = File.ReadAllBytes(path);
+
+            // A .pcap/.pcapng straight from Wireshark or tcpdump needs no conversion step.
+            if (PcapReader.LooksLikeCapture(fileBytes))
+            {
+                var cap = PcapReader.Read(fileBytes);
+                Console.WriteLine($"Capture file: {cap.PacketsSeen} packet(s), " +
+                                  $"{cap.TcpPacketsWithPayload} TCP packet(s) carrying data");
+                foreach (var n in cap.Notes) Console.WriteLine($"  note: {n}");
+                if (cap.Streams.Count > 0)
+                {
+                    Console.WriteLine("  TCP streams found:");
+                    foreach (var kv in cap.Streams)
+                        Console.WriteLine($"    {kv.Key}   {kv.Value.Count} byte(s)");
+                }
+                Console.WriteLine();
+
+                // --rawout writes each stream's payload to its own file, so the extraction can be
+                // checked against another tool rather than taken on trust.
+                int ri = Array.IndexOf(args, "--rawout");
+                if (ri >= 0 && ri + 1 < args.Length)
+                {
+                    int n2 = 0;
+                    foreach (var kv in cap.Streams)
+                    {
+                        var outPath = $"{args[ri + 1]}.{++n2}_{kv.Key.Replace(" -> ", "_to_").Replace(":", "-")}.bin";
+                        File.WriteAllBytes(outPath, kv.Value.ToArray());
+                        Console.WriteLine($"  wrote {kv.Value.Count} byte(s) to {outPath}");
+                    }
+                    Console.WriteLine();
+                }
+
+                if (cap.Streams.Count > 0)
+                {
+                    // Each stream is parsed on its own. Merging them would splice one camera's
+                    // bytes into another's frames and manufacture checksum failures.
+                    int si = 0;
+                    foreach (var kv in cap.Streams)
+                    {
+                        si++;
+                        Console.WriteLine(new string('#', 78));
+                        Console.WriteLine($"STREAM {si} of {cap.Streams.Count}: {kv.Key}  ({kv.Value.Count} bytes)");
+                        Console.WriteLine(new string('#', 78));
+                        AnalyzeBytes(kv.Value.ToArray());
+                        Console.WriteLine();
+                    }
+                    Summary();
+                    return 0;
+                }
+                raw = cap.Payload;
+                if (raw.Length == 0)
+                {
+                    Console.WriteLine("No TCP payload in that capture. Either the filter caught only handshake");
+                    Console.WriteLine("packets, or the devices are on UDP - say so and I will add UDP extraction.");
+                    return 1;
+                }
+            }
+            else if (binary)
+            {
+                raw = fileBytes;
+            }
+            else
+            {
+                raw = Hex.FromLooseText(System.Text.Encoding.UTF8.GetString(fileBytes));
+            }
         }
 
         if (raw.Length == 0)
@@ -55,6 +122,13 @@ public static class Program
         }
 
         Console.WriteLine($"Input: {raw.Length} bytes");
+        AnalyzeBytes(raw);
+        Summary();
+        return 0;
+    }
+
+    static void AnalyzeBytes(byte[] raw)
+    {
         var frames = Framing.SplitFrames(raw, out var notes);
         foreach (var n in notes) Console.WriteLine($"  note: {n}");
         Console.WriteLine($"Found {frames.Count} frame(s) delimited by 0x7E");
@@ -63,9 +137,6 @@ public static class Program
         int index = 0;
         foreach (var fr in frames)
             ReportFrame(++index, fr);
-
-        Summary();
-        return 0;
     }
 
     static void Usage()

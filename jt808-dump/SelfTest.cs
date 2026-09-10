@@ -75,6 +75,12 @@ public static class SelfTest
                 LocationBody(0, 0x0003, 22.547, 114.085947, 120, 720, 45, "260909124500",
                     Item(0x64, AdasData(0x01, 0x01, 2))), true),
 
+            // DSM fatigue, 2019 header - the combination the G40s reportedly use
+            BuildFrame(0x0200, "013800138000", 6,
+                LocationBody(0, 0x0003, 22.547, 114.085947, 100, 600, 90, "260909125500",
+                    Item(0x01, new byte[] { 0, 0, 0x27, 0x10 }),
+                    Item(0x65, DsmData(0x01, 0x01, 2, 7, 3))), true),
+
             // something under an ID no public table covers
             BuildFrame(0x0200, "013800138000", 5,
                 LocationBody(0, 0x0003, 22.547, 114.085947, 100, 600, 90, "260909124530",
