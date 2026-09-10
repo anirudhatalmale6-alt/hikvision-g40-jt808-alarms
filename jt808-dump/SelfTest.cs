@@ -39,6 +39,8 @@ public static class SelfTest
         Case("position only", TestPositionOnlyReportsNothing);
         Case("wrong length refused", TestWrongLengthItemIsRefused);
         Case("unknown vendor id", TestUnknownVendorIdIsStillListed);
+        Case("log text vs timestamps", TestLogTextIgnoresTimestamps);
+        Case("real device packet", TestRealDevicePacket);
 
         Console.WriteLine(new string('-', 60));
         Console.WriteLine($"{_pass} passed, {_fail} failed");
@@ -310,6 +312,68 @@ public static class SelfTest
         var text = ActiveSafety.TryDecode(0x65, short65, out var mismatch);
         Check("wrong length: decoder refused a 40-byte 0x65", text == null);
         Check("wrong length: refusal explains itself", mismatch != null && mismatch.Contains("40 bytes"));
+    }
+
+    /// <summary>
+    /// Regression: an ISO timestamp is almost all hex digits. Harvesting every hex character in a
+    /// log file turns "2026-09-10T13:25:23.591Z" into bytes, splices them onto the next real
+    /// packet, and the tool then reports a confident decode of a frame that never existed. This
+    /// happened on the client's first real log. It must not happen again.
+    /// </summary>
+    static void TestLogTextIgnoresTimestamps()
+    {
+        const string log =
+            "info: MessageHandler[0] 0x0200 raw [100300000000]: " +
+            "7E0200402901000000001003000000000002000000000000000A0314969A00000088004600000109260910142524" +
+            "3101002A02000101040000088F1D7E\n" +
+            "2026-09-10T13:25:23.591Z\n" +
+            "info: MessageHandler[0] 0x0200 attach buckets [100300000000] | custom: [] | basic: [0x31, 0x2A, 0x01]\n";
+
+        var bytes = Hex.FromLogText(log);
+        Check("log text: exactly one frame's worth of bytes recovered", bytes.Length == 61, $"{bytes.Length} bytes");
+
+        var frames = Framing.SplitFrames(bytes, out _);
+        Check("log text: exactly one frame, no phantom from the timestamp", frames.Count == 1, frames.Count.ToString());
+        if (frames.Count == 0) { _fail++; return; }
+
+        var f = Framing.Parse(frames[0]);
+        Check("log text: the recovered frame checksums correctly", f.ChecksumOk,
+            $"{f.ChecksumInPacket:X2} vs {f.ChecksumComputed:X2}");
+
+        // Positive control: the timestamp really does contain enough hex to be dangerous.
+        var justTimestamp = Hex.FromLooseText("2026-09-10T13:25:23.591Z");
+        Check("log text: control - naive parsing of that timestamp does yield bytes",
+            justTimestamp.Length > 0, "if this fails the regression test proves nothing");
+    }
+
+    /// <summary>
+    /// A real packet from the client's G40 (terminal 100300000000, 10 Sep 2026). Pins the values
+    /// this decoder reports for genuine hardware, so a later refactor cannot quietly change them.
+    /// </summary>
+    static void TestRealDevicePacket()
+    {
+        const string hex =
+            "7E0200402901000000001003000000000002000000000000000A0314969A00000088004600000109260910142524" +
+            "3101002A02000101040000088F1D7E";
+
+        var frames = Framing.SplitFrames(Hex.FromLogText(hex), out _);
+        Check("real packet: one frame", frames.Count == 1, frames.Count.ToString());
+        if (frames.Count == 0) { _fail += 6; return; }
+
+        var f = Framing.Parse(frames[0]);
+        Check("real packet: checksum valid", f.ChecksumOk);
+        Check("real packet: detected as 2019", f.IsVersion2019);
+        Check("real packet: terminal 100300000000", f.TerminalPhone == "100300000000", f.TerminalPhone);
+
+        var loc = Location.ParseLocationBody(f.Body);
+        Check("real packet: three additional-info items", loc.Attachments.Count == 3, loc.Attachments.Count.ToString());
+        Check("real packet: items are 0x31, 0x2A, 0x01 - matching the client's own log",
+            loc.Attachments.Select(a => a.Id).SequenceEqual(new byte[] { 0x31, 0x2A, 0x01 }),
+            string.Join(",", loc.Attachments.Select(a => $"0x{a.Id:X2}")));
+        Check("real packet: no active-safety item present",
+            loc.Attachments.All(a => a.Id is not (0x64 or 0x65 or 0x66 or 0x67)));
+        Check("real packet: ACC reads as OFF", (loc.Status & 1) == 0, $"status 0x{loc.Status:X8}");
+        Check("real packet: speed zero", loc.Speed == 0, loc.Speed.ToString());
     }
 
     /// <summary>A vendor ID nobody documents must still be surfaced with its bytes.</summary>

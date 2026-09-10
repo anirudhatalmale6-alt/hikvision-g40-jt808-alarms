@@ -6,8 +6,61 @@ namespace Jt808Dump;
 public static class Hex
 {
     /// <summary>
+    /// Pulls packet bytes out of arbitrary log text.
+    ///
+    /// Line-oriented and deliberately picky, because the obvious approach - "keep every hex
+    /// digit in the file" - is wrong in a way that hides itself. A log line like
+    /// "2026-09-10T13:25:23.591Z" is almost entirely hex digits; harvesting them yields
+    /// 2026091013252359 and splices it onto the next real packet, at which point the tool
+    /// reports a confident decode of a frame that never existed.
+    ///
+    /// So: strip comments, then take only runs of hex-and-whitespace long enough to be a
+    /// packet (a JT808 frame cannot be shorter than about 13 bytes). Timestamps, terminal IDs
+    /// in square brackets and log prefixes all fall below that bar and are ignored.
+    /// </summary>
+    public static byte[] FromLogText(string text)
+    {
+        const int MinHexDigits = 24; // 12 bytes - below any real JT808 frame
+
+        var collected = new List<byte>();
+        bool foundAny = false;
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine;
+            int hash = line.IndexOf('#');
+            if (hash >= 0) line = line[..hash];
+
+            // walk the line, accumulating maximal runs of [hex digits + whitespace]
+            int i = 0;
+            while (i < line.Length)
+            {
+                if (!Uri.IsHexDigit(line[i])) { i++; continue; }
+                int start = i;
+                int digits = 0;
+                while (i < line.Length && (Uri.IsHexDigit(line[i]) || line[i] == ' ' || line[i] == '\t' || line[i] == '\r'))
+                {
+                    if (Uri.IsHexDigit(line[i])) digits++;
+                    i++;
+                }
+                if (digits >= MinHexDigits)
+                {
+                    var run = line[start..i];
+                    var bytes = FromLooseText(run);
+                    if (bytes.Length > 0) { collected.AddRange(bytes); foundAny = true; }
+                }
+            }
+        }
+
+        // A file that is nothing but short hex lines still deserves to be read.
+        if (!foundAny) return FromLooseText(text);
+        return collected.ToArray();
+    }
+
+    /// <summary>
     /// Pulls every hex digit pair out of a blob of text. Tolerates "7E 02 00", "7e0200",
     /// "0x7E,0x02", Wireshark "0000  7e 02 00 ...  ~.." lines and C# byte-array dumps.
+    /// Use <see cref="FromLogText"/> for anything that might contain prose or timestamps.
     /// </summary>
     public static byte[] FromLooseText(string text)
     {

@@ -144,6 +144,35 @@ public static class Location
         return r;
     }
 
+    /// <summary>
+    /// The 0x0200 status word. Worth reading in full: bit 0 is the ignition, and a camera with
+    /// ACC off is a parked vehicle - ADAS and DSM do not run, so no alarm can be raised no
+    /// matter how the server is configured.
+    /// </summary>
+    public static string DescribeStatus(uint s)
+    {
+        var parts = new List<string>
+        {
+            $"ACC {((s & 1) != 0 ? "ON (ignition on)" : "OFF (ignition off)")}",
+            (s & (1u << 1)) != 0 ? "positioned" : "NOT POSITIONED (no GNSS fix)",
+            (s & (1u << 2)) != 0 ? "south latitude" : "north latitude",
+            (s & (1u << 3)) != 0 ? "west longitude" : "east longitude",
+            (s & (1u << 4)) != 0 ? "out of service" : "in service",
+        };
+        if ((s & (1u << 5)) != 0) parts.Add("lat/lng ENCRYPTED");
+        if ((s & (1u << 8)) != 0) parts.Add("fuel circuit disconnected");
+        if ((s & (1u << 9)) != 0) parts.Add("electrical circuit disconnected");
+        if ((s & (1u << 10)) != 0) parts.Add("doors locked");
+
+        var sats = new List<string>();
+        if ((s & (1u << 18)) != 0) sats.Add("GPS");
+        if ((s & (1u << 19)) != 0) sats.Add("BeiDou");
+        if ((s & (1u << 20)) != 0) sats.Add("GLONASS");
+        if ((s & (1u << 21)) != 0) sats.Add("Galileo");
+        parts.Add(sats.Count > 0 ? "using " + string.Join("+", sats) : "no constellation bits set");
+        return string.Join(", ", parts);
+    }
+
     public static string DescribeAlarmFlag(uint flag)
     {
         if (flag == 0) return "none";

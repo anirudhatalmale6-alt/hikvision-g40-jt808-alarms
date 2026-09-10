@@ -44,7 +44,7 @@ public static class Program
         if (path == null)
         {
             var stdin = Console.In.ReadToEnd();
-            raw = Hex.FromLooseText(stdin);
+            raw = Hex.FromLogText(stdin);
         }
         else
         {
@@ -111,7 +111,7 @@ public static class Program
             }
             else
             {
-                raw = Hex.FromLooseText(System.Text.Encoding.UTF8.GetString(fileBytes));
+                raw = Hex.FromLogText(System.Text.Encoding.UTF8.GetString(fileBytes));
             }
         }
 
@@ -234,7 +234,7 @@ under an ID your library silently drops.");
         Console.WriteLine();
         Console.WriteLine($"{ind}  position         : {loc.Latitude:0.000000}, {loc.Longitude:0.000000}   alt {loc.Altitude} m   speed {loc.Speed / 10.0:0.0} km/h   heading {loc.Direction}");
         Console.WriteLine($"{ind}  device time      : {loc.Time}");
-        Console.WriteLine($"{ind}  status word      : 0x{loc.Status:X8}");
+        Console.WriteLine($"{ind}  status word      : 0x{loc.Status:X8}  {Location.DescribeStatus(loc.Status)}");
         Console.WriteLine($"{ind}  alarm flag       : 0x{loc.AlarmFlag:X8}  {Location.DescribeAlarmFlag(loc.AlarmFlag)}");
         foreach (var w in loc.Warnings) Console.WriteLine($"{ind}  WARNING: {w}");
 
