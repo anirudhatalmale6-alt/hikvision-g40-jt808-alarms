@@ -41,6 +41,8 @@ public static class SelfTest
         Case("unknown vendor id", TestUnknownVendorIdIsStillListed);
         Case("log text vs timestamps", TestLogTextIgnoresTimestamps);
         Case("real device packet", TestRealDevicePacket);
+        Case("real driving packet", TestRealDrivingPacket);
+        Case("1078 behaviour bits", TestVideoAlarmBits);
 
         Console.WriteLine(new string('-', 60));
         Console.WriteLine($"{_pass} passed, {_fail} failed");
@@ -374,6 +376,72 @@ public static class SelfTest
             loc.Attachments.All(a => a.Id is not (0x64 or 0x65 or 0x66 or 0x67)));
         Check("real packet: ACC reads as OFF", (loc.Status & 1) == 0, $"status 0x{loc.Status:X8}");
         Check("real packet: speed zero", loc.Speed == 0, loc.Speed.ToString());
+    }
+
+    /// <summary>
+    /// A real packet from the client's second G40 (terminal 100100000000) while driving.
+    /// This is the one that identified the device family: items 0x14/0x15/0x16/0x17 with
+    /// lengths 4/4/4/2 are the JT/T 1078 video extension, not the 0x64/0x65 active-safety set.
+    /// </summary>
+    static void TestRealDrivingPacket()
+    {
+        const string hex =
+            "7E020040420100000000100100000000092600000000000C10030311A3D400001D78003E01B8000C2609101653" +
+            "59010400005BA8140400000000150400000000160400000000170200002A020000300135310112767E";
+
+        var frames = Framing.SplitFrames(Hex.FromLogText(hex), out _);
+        Check("driving packet: one frame", frames.Count == 1, frames.Count.ToString());
+        if (frames.Count == 0) { _fail += 7; return; }
+
+        var f = Framing.Parse(frames[0]);
+        Check("driving packet: checksum valid", f.ChecksumOk);
+        var loc = Location.ParseLocationBody(f.Body);
+
+        Check("driving packet: ACC reads as ON", (loc.Status & 1) != 0, $"status 0x{loc.Status:X8}");
+        Check("driving packet: speed 44.0 km/h", loc.Speed == 440, loc.Speed.ToString());
+        Check("driving packet: 8 additional-info items", loc.Attachments.Count == 8, loc.Attachments.Count.ToString());
+        Check("driving packet: carries the 1078 video items 0x14-0x17",
+            new byte[] { 0x14, 0x15, 0x16, 0x17 }.All(id => loc.Attachments.Any(a => a.Id == id)),
+            string.Join(",", loc.Attachments.Select(a => $"0x{a.Id:X2}")));
+        Check("driving packet: item lengths match the 1078 layout 4/4/4/2",
+            loc.Attachments.First(a => a.Id == 0x14).Data.Length == 4 &&
+            loc.Attachments.First(a => a.Id == 0x15).Data.Length == 4 &&
+            loc.Attachments.First(a => a.Id == 0x16).Data.Length == 4 &&
+            loc.Attachments.First(a => a.Id == 0x17).Data.Length == 2);
+        Check("driving packet: still no active-safety item",
+            loc.Attachments.All(a => a.Id is not (0x64 or 0x65 or 0x66 or 0x67)));
+
+        var mileage = loc.Attachments.First(a => a.Id == 0x01).Data;
+        uint m = (uint)((mileage[0] << 24) | (mileage[1] << 16) | (mileage[2] << 8) | mileage[3]);
+        Check("driving packet: mileage 2346.4 km", m == 23464, $"{m / 10.0}");
+    }
+
+    /// <summary>
+    /// The 0x14 bit that matters is bit 5 - abnormal driving behaviour. If that decode ever
+    /// breaks, a fatigue or phone-use alarm goes unnoticed exactly like the 0x65 one did.
+    /// </summary>
+    static void TestVideoAlarmBits()
+    {
+        var clear = Jt1078.TryDecode(0x14, new byte[] { 0, 0, 0, 0 }, out var m1);
+        Check("0x14: all-clear reports nothing set", clear != null && clear.Contains("no video alarm bits set"), m1);
+
+        // bit 5 set = abnormal driving behaviour
+        var behaviour = Jt1078.TryDecode(0x14, new byte[] { 0, 0, 0, 0x20 }, out _);
+        Check("0x14: bit 5 decoded as abnormal driving behaviour",
+            behaviour != null && behaviour.Contains("ABNORMAL DRIVING BEHAVIOUR"), behaviour);
+
+        // a reserved bit must be surfaced as unmapped, never silently ignored
+        var reserved = Jt1078.TryDecode(0x14, new byte[] { 0x80, 0, 0, 0 }, out _);
+        Check("0x14: an undocumented bit is reported as UNMAPPED",
+            reserved != null && reserved.Contains("UNMAPPED"), reserved);
+
+        // wrong length must be refused
+        var bad = Jt1078.TryDecode(0x14, new byte[] { 0, 0 }, out var m2);
+        Check("0x14: wrong length refused", bad == null && m2 != null && m2.Contains("2 bytes"), m2);
+
+        var detail = Jt1078.TryDecode(0x18, new byte[] { 0x00, 0x02, 0x07 }, out _);
+        Check("0x18: phone-call bit decoded", detail != null && detail.Contains("phone call"), detail);
+        Check("0x18: fatigue degree read", detail != null && detail.Contains("fatigue degree    : 7"), detail);
     }
 
     /// <summary>A vendor ID nobody documents must still be surfaced with its bytes.</summary>

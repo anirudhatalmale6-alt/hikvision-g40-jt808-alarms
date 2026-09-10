@@ -8,7 +8,7 @@ public static class Program
     static int _framesSeen, _framesBadChecksum, _locationFrames;
     static readonly SortedDictionary<byte, int> _attachIdCounts = new();
     static readonly SortedDictionary<ushort, int> _messageIdCounts = new();
-    static int _activeSafetyItems;
+    static int _activeSafetyItems, _videoExtensionItems;
 
     public static int Main(string[] args)
     {
@@ -256,8 +256,11 @@ under an ID your library silently drops.");
             Console.WriteLine($"{ind}    ID 0x{a.Id:X2}  len {a.DeclaredLength}  -  {Location.AttachName(a.Id)}{(a.Truncated ? "   [TRUNCATED]" : "")}");
 
             if (a.Id is 0x64 or 0x65 or 0x66 or 0x67) _activeSafetyItems++;
+            if (Jt1078.IsVideoExtensionItem(a.Id)) _videoExtensionItems++;
 
             string decoded = ActiveSafety.TryDecode(a.Id, a.Data, out var mismatch);
+            if (decoded == null && mismatch == null && Jt1078.IsVideoExtensionItem(a.Id))
+                decoded = Jt1078.TryDecode(a.Id, a.Data, out mismatch);
             if (decoded != null)
             {
                 Console.WriteLine(decoded);
@@ -332,6 +335,13 @@ under an ID your library silently drops.");
             foreach (var kv in _attachIdCounts)
                 Console.WriteLine($"    0x{kv.Key:X2}  x{kv.Value,-5} {Location.AttachName(kv.Key)}");
             Console.WriteLine();
+            if (_videoExtensionItems > 0)
+            {
+                Console.WriteLine("  JT/T 1078 video-extension items are present (0x14-0x18). That family routes");
+                Console.WriteLine("  driver-behaviour alarms through the 0x14 bitmask plus an 0x18 detail item,");
+                Console.WriteLine("  NOT through 0x64/0x65. Watch those two when an event fires.");
+                Console.WriteLine();
+            }
             Console.WriteLine(_activeSafetyItems > 0
                 ? $"  {_activeSafetyItems} active-safety item(s) present. The alarms ARE arriving - they are being"
                 : "  No 0x64/0x65/0x66/0x67 items in this capture.");

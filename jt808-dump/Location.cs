@@ -186,6 +186,8 @@ public static class Location
     public static string AttachName(byte id)
     {
         if (StandardAttachNames.TryGetValue(id, out var n)) return n;
+        var video = Jt1078.Name(id);
+        if (video != null) return video;
         return id switch
         {
             0x64 => "ADAS alarm (active safety extension)",
